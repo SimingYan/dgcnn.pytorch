@@ -1,12 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-@Author: An Tao, Pengliang Ji
-@Contact: ta19@mails.tsinghua.edu.cn, jpl1723@buaa.edu.cn
-@File: main_semseg.py
-@Time: 2021/7/20 7:49 PM
-"""
-
 
 from __future__ import print_function
 import os
@@ -42,6 +35,37 @@ def _init_():
     os.system('cp model.py outputs' + '/' + args.exp_name + '/' + 'model.py.backup')
     os.system('cp util.py outputs' + '/' + args.exp_name + '/' + 'util.py.backup')
     os.system('cp data.py outputs' + '/' + args.exp_name + '/' + 'data.py.backup')
+
+def copy_parameters(model, pretrained, verbose=True):
+    # ref: https://discuss.pytorch.org/t/how-to-load-part-of-pre-trained-model/1113/3
+    model_dict = model.state_dict()
+    if 'model' in pretrained:
+        pretrained_dict = pretrained['model']
+    else:
+        pretrained_dict = pretrained['model_state_dict']
+    
+    new_state_dict = {}
+    for param_name in pretrained_dict:
+        if 'encoder.dgcnn_encoder' in param_name:
+            newname = param_name.replace('encoder.dgcnn_encoder', 'module')
+            new_state_dict[newname] = pretrained_dict[param_name]
+        else:
+            new_state_dict[param_name] = pretrained_dict[param_name]
+
+    pretrained_dict = new_state_dict
+
+    pretrained_dict = {k: v for k, v in pretrained_dict.items() if
+                       k in model_dict and pretrained_dict[k].size() == model_dict[k].size()}
+
+    if verbose:
+        print('=' * 27)
+        print('Restored Params and Shapes:')
+        for k, v in pretrained_dict.items():
+            print(k, ': ', v.size())
+        print('=' * 68)
+    model_dict.update(pretrained_dict)
+    model.load_state_dict(model_dict)
+    return model
 
 
 def calculate_sem_IoU(pred_np, seg_np, visual=False):
@@ -164,6 +188,10 @@ def train(args, io):
 
     model = nn.DataParallel(model)
     print("Let's use", torch.cuda.device_count(), "GPUs!")
+    
+    if args.restore_path:
+        checkpoint = torch.load(args.restore_path)
+        model = copy_parameters(model, checkpoint, verbose=True)
 
     if args.use_sgd:
         print("Use SGD")
@@ -305,7 +333,13 @@ def test(args, io):
                 raise Exception("Not implemented")
                 
             model = nn.DataParallel(model)
-            model.load_state_dict(torch.load(os.path.join(args.model_root, 'model_%s.t7' % test_area)))
+
+            if args.restore_path:
+                checkpoint = torch.load(args.restore_path)
+                model = copy_parameters(model, checkpoint, verbose=True)
+            else:
+                model.load_state_dict(torch.load(os.path.join(args.model_root + '_%s' % test_area, 'models' , 'model_%s.t7' % test_area)))
+
             model = model.eval()
             test_acc = 0.0
             count = 0.0
@@ -409,6 +443,8 @@ if __name__ == "__main__":
                         help='visualize the model')
     parser.add_argument('--visu_format', type=str, default='ply',
                         help='file format of visualization')
+    parser.add_argument('--restore_path', type=str, default=None)
+    
     args = parser.parse_args()
 
     _init_()
